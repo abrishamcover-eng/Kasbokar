@@ -1,0 +1,20 @@
+{
+  "name": "BizSanj | اعتبارسنج کسب و کار",
+  "short_name": "BizSanj",
+  "description": "اعتبارسنج کسب و کار برای تبدیل ایده به فرضیه، آزمایش و شواهد واقعی.",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#e9edf2",
+  "theme_color": "#07345d",
+  "icons": [
+    {
+      "src": "./bizsanj-logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
