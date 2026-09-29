@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowLeft, Check, Loader2, Mail, Lock, UserRound } from "lucide-react";
-import { signIn, signUp } from "@/lib/supabase";
+import { authenticateDemoAccount, isSupabaseConfigured, registerDemoAccount, signIn, signUp } from "@/lib/supabase";
 
 type Mode = "login" | "signup";
 
@@ -21,16 +21,28 @@ export function Auth({ onSuccess }: { onSuccess: () => void }) {
 
     try {
       if (mode === "signup") {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error("یک ایمیل معتبر وارد کنید.");
         if (fullName.trim().length < 2) {
           throw new Error("نام باید حداقل ۲ کاراکتر باشد.");
         }
         if (password.length < 6) {
           throw new Error("رمز عبور باید حداقل ۶ کاراکتر باشد.");
         }
-        await signUp(email, password, fullName);
-        setSuccessMessage("ثبت‌نام موفق! لطفاً ایمیل خود را برای تأیید بررسی کنید.");
+        if (isSupabaseConfigured) {
+          await signUp(email, password, fullName);
+          setSuccessMessage("ثبت‌نام موفق! لطفاً ایمیل خود را برای تأیید بررسی کنید.");
+        } else {
+          registerDemoAccount(email.trim(), password, fullName.trim());
+          onSuccess();
+        }
       } else {
-        await signIn(email, password);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error("یک ایمیل معتبر وارد کنید.");
+        if (password.length < 6) throw new Error("رمز عبور باید حداقل ۶ کاراکتر باشد.");
+        if (isSupabaseConfigured) {
+          await signIn(email, password);
+        } else {
+          authenticateDemoAccount(email, password);
+        }
         onSuccess();
       }
     } catch (err) {
@@ -44,11 +56,12 @@ export function Auth({ onSuccess }: { onSuccess: () => void }) {
     <div className="auth-page" dir="rtl">
       <div className="auth-card">
         <div className="auth-header">
+          <div className="auth-brand"><img src="./bizsanj-logo.png" alt="BizSanj" /><div><strong>BizSanj</strong><span>اعتبارسنج کسب‌وکار</span></div></div>
           <h1>{mode === "login" ? "ورود به حساب" : "ساخت حساب جدید"}</h1>
           <p>
-            {mode === "login"
+              {mode === "login"
               ? "برای ادامه کار، وارد حساب خود شوید."
-              : "با ثبت‌نام، پروژه‌های خود را در همه دستگاه‌ها همگام‌سازی کنید."}
+              : isSupabaseConfigured ? "با ثبت‌نام، پروژه‌های خود را در همه دستگاه‌ها همگام‌سازی کنید." : "برای شروع، یک فضای شخصی روی همین دستگاه بسازید."}
           </p>
         </div>
 
@@ -92,6 +105,7 @@ export function Auth({ onSuccess }: { onSuccess: () => void }) {
           </label>
 
           {error && <div className="auth-error">{error}</div>}
+          {!isSupabaseConfigured && <div className="auth-demo-note">نسخه آزمایشی آفلاین: اطلاعات این حساب فعلاً روی همین دستگاه ذخیره می‌شود.</div>}
           {successMessage && (
             <div className="auth-success">
               <Check size={16} /> {successMessage}

@@ -37,14 +37,16 @@ import "./index.css";
 import { analyzeValidation } from "@/lib/ai";
 import { LocationInsights } from "@/components/LocationInsights";
 import { InteractiveExperiments } from "@/components/InteractiveExperiments";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { UserReport } from "@/components/UserReport";
 import { VirtualCompetitors } from "@/components/VirtualCompetitors";
 import { HelpCenter } from "@/components/HelpCenter";
 import { Auth } from "@/pages/Auth";
-import { clearStoredData, readBackupFile, readStored, STORAGE_KEYS, writeStored, type RecentProject, type StoredLocationInsights, type UserProfile } from "@/lib/persistence";
+import { clearCurrentProjectData, clearStoredData, readBackupFile, readStored, setStorageScope, STORAGE_KEYS, writeStored, type RecentProject, type StoredLocationInsights, type UserProfile } from "@/lib/persistence";
 import { buildValidationPrompt, copyPrompt, getProviderLabel, getProviderUrl, openUserAI, readClipboardText, readUserAIResult, saveUserAIResult, type UserAIProvider } from "@/lib/user-ai";
 import { toggleMultiSelection } from "@/lib/questionnaire";
-import { supabase, getProfile } from "@/lib/supabase";
+import { supabase, getProfile, isSupabaseConfigured, getDemoSession, clearDemoSession } from "@/lib/supabase";
+import { getBillingStatus } from "@/lib/billing";
 
 type View = "dashboard" | "new-project" | "questions" | "ai-review" | "experiments" | "location" | "report" | "help";
 
@@ -149,6 +151,7 @@ function buildQuestionBank(draft: ProjectDraft): ValidationQuestion[] {
 }
 
 function App() {
+  if (!isSupabaseConfigured) setStorageScope(getDemoSession()?.user.email);
   const [view, setView] = useState<View>("dashboard");
   const [mobileNav, setMobileNav] = useState(false);
   const [draft, setDraft] = useState<ProjectDraft>(() => readStored(STORAGE_KEYS.draft, initialProject));
@@ -161,6 +164,8 @@ function App() {
   const [experimentOpen, setExperimentOpen] = useState(false);
   const [session, setSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [growthEntitled, setGrowthEntitled] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -179,11 +184,22 @@ function App() {
     }
   }, []);
 
+  useEffect(() => {
+    getBillingStatus().then(status => setGrowthEntitled(status.entitled));
+  }, []);
+
   // بررسی وضعیت احراز هویت و خواندن پروفایل
   useEffect(() => {
     const loadProfile = async (currentSession: any) => {
       if (!currentSession?.user?.id) {
         setProfile(initialProfile);
+        return;
+      }
+      if (!isSupabaseConfigured) {
+        setProfile({
+          name: currentSession.user.user_metadata?.full_name || currentSession.user.email?.split('@')[0] || 'کاربر',
+          role: 'فضای شخصی',
+        });
         return;
       }
       try {
@@ -201,18 +217,45 @@ function App() {
       }
     };
 
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
+    if (!isSupabaseConfigured) {
+      const demoSession = getDemoSession();
+      setStorageScope(demoSession?.user.email);
+      setSession(demoSession);
       setAuthLoading(false);
-      loadProfile(data.session);
-    });
+      void loadProfile(demoSession);
+    } else {
+      supabase.auth.getSession().then(({ data }) => {
+        setStorageScope(data.session?.user.email);
+        setSession(data.session);
+        setAuthLoading(false);
+        loadProfile(data.session);
+      }).catch(() => {
+        setSession(null);
+        setAuthLoading(false);
+      });
+    }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       loadProfile(newSession);
     });
 
-    return () => subscription.unsubscribe();
+    const handleDemoAuthChange = () => {
+      const nextSession = getDemoSession();
+      setStorageScope(nextSession?.user.email);
+      setSession(nextSession);
+      setDraft(readStored(STORAGE_KEYS.draft, initialProject));
+      setAnswers(readStored(STORAGE_KEYS.answers, initialAnswers));
+      setActiveQuestion(readStored(STORAGE_KEYS.activeQuestion, 0));
+      setRecentProjects(readStored(STORAGE_KEYS.recentProjects, []));
+      void loadProfile(nextSession);
+    };
+    window.addEventListener('bizsanj-auth-change', handleDemoAuthChange);
+
+    return () => {
+      subscription?.unsubscribe();
+      window.removeEventListener('bizsanj-auth-change', handleDemoAuthChange);
+    };
   }, []);
 
   const questionBank = useMemo(() => buildQuestionBank(draft), [draft]);
@@ -240,6 +283,11 @@ function App() {
   };
 
   const startNewProject = () => {
+    if (draft.name.trim() && recentProjects.length > 0 && !growthEntitled) {
+      setUpgradeOpen(true);
+      showToast("برای ساخت پروژه دوم، پلن رشد را فعال کنید");
+      return;
+    }
     if (draft.name.trim()) {
       const next: RecentProject = { id: `${Date.now()}`, name: draft.name.trim(), description: draft.description, presenceType: draft.presenceType, businessType: draft.businessType, updatedAt: new Date().toISOString() };
       const projects = [next, ...recentProjects.filter(project => project.name !== next.name)].slice(0, 6);
@@ -312,7 +360,8 @@ function App() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured) await supabase.auth.signOut();
+    else clearDemoSession();
     showToast("از حساب خود خارج شدید");
   };
 
@@ -340,7 +389,9 @@ function App() {
   }
 
   if (!session) {
-    return <Auth onSuccess={() => {}} />;
+    return <Auth onSuccess={() => {
+      if (!isSupabaseConfigured) setSession(getDemoSession());
+    }} />;
   }
 
   return (
@@ -382,11 +433,11 @@ function App() {
           <button className="footer-link" onClick={() => importInputRef.current?.click()}><Upload size={17} /> بازیابی از JSON</button>
           <button className="footer-link" onClick={handleSignOut}><LogOut size={17} /> خروج از حساب</button>
           <button className="footer-link" onClick={resetLocalData}><Settings2 size={17} /> پاک‌کردن داده‌های محلی</button>
-          <div className="plan-card">
+          <button className="plan-card" onClick={() => growthEntitled ? showToast("پلن رشد شما فعال است") : setUpgradeOpen(true)}>
             <div className="plan-icon"><Zap size={17} /></div>
-            <div><strong>نسخه آزمایشی</strong><span>۳ پروژه فعال</span></div>
+            <div><strong>{growthEntitled ? "پلن رشد فعال" : "نسخه رایگان"}</strong><span>{growthEntitled ? "پروژه‌های نامحدود" : "۱ پروژه فعال رایگان"}</span></div>
             <ArrowLeft size={16} className="muted-icon" />
-          </div>
+          </button>
         </div>
       </aside>
 
@@ -404,7 +455,7 @@ function App() {
         <div className="page-wrap">
           {view === "dashboard" && <Dashboard profile={profile} draft={draft} recentProjects={recentProjects} onNavigate={go} onToast={showToast} />}
           {view === "help" && <HelpCenter onBack={() => go("dashboard")} />}
-          {view === "new-project" && <NewProject profile={profile} setProfile={setProfile} draft={draft} setDraft={setDraft} onBack={() => go("dashboard")} onContinue={startNewProject} />}
+          {view === "new-project" && <NewProject profile={profile} setProfile={setProfile} draft={draft} setDraft={setDraft} hasExistingData={Boolean(draft.name.trim() || Object.keys(answers).length)} onBack={() => go("dashboard")} onExportBackup={downloadJson} onReset={() => { clearCurrentProjectData(); setDraft(initialProject); setAnswers(initialAnswers); setActiveQuestion(0); showToast("اطلاعات پروژه قبلی پاک شد؛ پروژه جدید را وارد کنید"); }} onContinue={startNewProject} />}
           {view === "questions" && <QuestionFlow questionBank={questionBank} draft={draft} setDraft={setDraft} active={active} activeQuestion={activeQuestion} setActiveQuestion={setActiveQuestion} answers={answers} setAnswers={setAnswers} saved={saved} setSaved={setSaved} onNext={() => activeQuestion < questionBank.length - 1 ? setActiveQuestion(activeQuestion + 1) : go("ai-review")} onExperiments={() => go("experiments")} onLocation={() => go("location")} progress={progress} />}
           {view === "ai-review" && <AIReview draft={draft} answers={answers} onContinue={() => go("experiments")} onToast={showToast} />}
           {view === "experiments" && <><InteractiveExperiments onReport={() => go("report")} onToast={showToast} />{draft.presenceType === "آنلاین" && <VirtualCompetitors />}</>}
@@ -415,6 +466,7 @@ function App() {
 
       <input ref={importInputRef} type="file" accept="application/json,.json" onChange={importJson} style={{ display: "none" }} />
       {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
+      {upgradeOpen && <UpgradeModal onClose={() => setUpgradeOpen(false)} onEntitled={() => setGrowthEntitled(true)} onToast={showToast} />}
     </div>
   );
 }
@@ -424,13 +476,13 @@ function Dashboard({ profile, draft, recentProjects, onNavigate, onToast }: { pr
   return <section className="dashboard-page"><div className="page-heading dashboard-heading"><div><div className="eyebrow">فضای شخصی</div><h1>{profile.name ? `سلام ${profile.name}، آماده‌ای یک فرضیه را آزمایش کنیم؟` : "برای شروع، اطلاعات خودت را وارد کن"}</h1><p>ایده‌ها زمانی ارزشمند می‌شوند که به شواهد واقعی وصل شوند.</p></div><button className="primary-button" onClick={() => onNavigate("new-project")}><Plus size={18} /> پروژه جدید</button></div><div className="stat-grid"><div className="stat-card accent-card"><div className="stat-icon"><Gauge size={19} /></div><div><span>امتیاز اعتبارسنجی</span><strong>— <small>پس از ثبت داده</small></strong></div></div><div className="stat-card"><div className="stat-icon blue"><FlaskConical size={19} /></div><div><span>آزمایش‌های انجام‌شده</span><strong>۰</strong></div><div className="stat-note">هنوز داده‌ای ثبت نشده</div></div><div className="stat-card"><div className="stat-icon purple"><ShieldCheck size={19} /></div><div><span>شواهد ثبت‌شده</span><strong>۰</strong></div><div className="stat-note">هنوز داده‌ای ثبت نشده</div></div></div><div className="dashboard-grid"><div className="main-column"><div className="section-heading"><div><h2>پروژه‌های اخیر</h2><p>آخرین پروژه‌هایی که در این مرورگر ساخته یا ادامه داده‌ای.</p></div><button className="text-button" onClick={() => onNavigate("new-project")}>پروژه جدید <Plus size={15} /></button></div>{projectItems.length ? projectItems.map((project, index) => <div className={`project-card ${index === 0 ? "featured-project" : "compact-project"}`} key={project.id}><div className="project-card-top"><div className="project-title-wrap"><div className={`project-symbol ${index === 0 ? "amber-bg" : "violet-bg"}`}><BriefcaseBusiness size={20} /></div><div><h3>{project.name}</h3><div className="meta-row"><span className="status-pill draft"><span className="status-dot" />{index === 0 ? "آخرین پروژه" : "پروژه ذخیره‌شده"}</span>{project.presenceType && <span>{project.presenceType}</span>}{project.businessType && <span>{project.businessType}</span>}</div></div></div></div><div className="project-card-footer"><span className="evidence-count"><ShieldCheck size={14} /> ذخیره‌شده در همین مرورگر</span><button className="secondary-button" onClick={() => onNavigate("questions")}>ادامه مسیر <ArrowLeft size={15} /></button></div></div>) : <div className="empty-projects-card"><BriefcaseBusiness size={25} /><h3>هنوز پروژه‌ای ساخته نشده است</h3><p>اولین ایده‌ات را ثبت کن تا در این قسمت نگهداری شود.</p><button className="primary-button" onClick={() => onNavigate("new-project")}><Plus size={16} /> ساخت اولین پروژه</button></div>}</div><aside className="side-column"><div className="next-action-card"><div className="card-kicker"><Sparkles size={15} /> پیشنهاد بعدی</div><h3>{draft.name ? "یک آزمایش کوچک طراحی کن" : "ابتدا پروژه بساز"}</h3><p>{draft.name ? "برای مهم‌ترین فرضیه پروژه، یک آزمایش کوچک طراحی کن." : "نام و اطلاعات ایده‌ات را وارد کن تا مسیر اعتبارسنجی ساخته شود."}</p><div className="action-insight"><div className="insight-icon"><Target size={17} /></div><div><span>وضعیت</span><strong>{draft.name ? "هنوز فرضیه‌ای ثبت نشده" : "منتظر اطلاعات کاربر"}</strong></div></div><button className="primary-button full-width" onClick={() => onNavigate(draft.name ? "experiments" : "new-project")}>{draft.name ? "طراحی آزمایش" : "ساخت پروژه"} <ArrowLeft size={16} /></button></div><div className="tip-card"><div className="tip-icon"><Lightbulb size={18} /></div><div><strong>نکته اعتبارسنجی</strong><p>به جای پرسیدن «آیا می‌خری؟»، درباره آخرین باری بپرس که مشتری این مشکل را حل کرده است.</p><button className="text-button" onClick={() => onNavigate("help")}>مطالعه راهنما <ArrowLeft size={14} /></button></div></div></aside></div></section>;
 }
 
-function NewProject({ profile, setProfile, draft, setDraft, onBack, onContinue }: { profile: UserProfile; setProfile: (profile: UserProfile) => void; draft: ProjectDraft; setDraft: (draft: ProjectDraft) => void; onBack: () => void; onContinue: () => void }) {
+function NewProject({ profile, setProfile, draft, setDraft, hasExistingData, onBack, onExportBackup, onReset, onContinue }: { profile: UserProfile; setProfile: (profile: UserProfile) => void; draft: ProjectDraft; setDraft: (draft: ProjectDraft) => void; hasExistingData: boolean; onBack: () => void; onExportBackup: () => void; onReset: () => void; onContinue: () => void }) {
   const [step, setStep] = useState(1);
   const valid = profile.name.trim().length > 1 && draft.name.trim().length > 2 && draft.description.trim().length > 10;
   const update = (key: keyof ProjectDraft, value: string) => setDraft({ ...draft, [key]: value });
   const businessTypes = ["دیجیتال", "خدماتی", "فروش", "تولید", "غذا و نوشیدنی", "آموزش", "سایر"];
   const goals = ["آیا مشکل واقعی است؟", "آیا مشتری حاضر به پرداخت است؟", "آیا قیمت مناسب است؟", "آیا کانال جذب مشتری جواب می‌دهد؟"];
-  return <section className="form-page"><div className="page-heading"><div><div className="eyebrow">شروع یک مسیر جدید</div><h1>پروژه جدید بساز</h1><p>در چند قدم، ایده‌ات را به مجموعه‌ای از فرضیه‌های قابل آزمایش تبدیل کن.</p></div><button className="ghost-button" onClick={onBack}><X size={17} /> انصراف</button></div>
+  return <section className="form-page"><div className="page-heading"><div><div className="eyebrow">شروع یک مسیر جدید</div><h1>پروژه جدید بساز</h1><p>در چند قدم، ایده‌ات را به مجموعه‌ای از فرضیه‌های قابل آزمایش تبدیل کن.</p></div><div className="new-project-actions">{hasExistingData && <><div className="reset-warning">اگر پروژه قبلی برایت مهم است، ابتدا از آن <button type="button" onClick={onExportBackup}>فایل JSON پشتیبان بساز</button>؛ پاک‌سازی قابل بازگشت نیست.</div><button className="ghost-button reset-project-button" onClick={() => { if (window.confirm("اگر پروژه قبلی برایت مهم است، ابتدا فایل JSON پشتیبان بساز. اطلاعات پروژه فعلی پاک شود؟")) { onReset(); setStep(1); } }}><X size={16} /> پاک کردن اطلاعات پروژه قبلی</button></>}<button className="ghost-button" onClick={onBack}><X size={17} /> انصراف</button></div></div>
     <div className="stepper"><div className={`stepper-step ${step >= 1 ? "done" : ""}`}><span>{step > 1 ? <Check size={14} /> : "۱"}</span><label>هویت ایده</label></div><div className="stepper-line"><div style={{ width: step === 3 ? "100%" : step === 2 ? "50%" : "0%" }} /></div><div className={`stepper-step ${step >= 2 ? "done" : ""}`}><span>{step > 2 ? <Check size={14} /> : "۲"}</span><label>بازار و مشتری</label></div><div className="stepper-line"><div style={{ width: step === 3 ? "100%" : "0%" }} /></div><div className={`stepper-step ${step >= 3 ? "done" : ""}`}><span>۳</span><label>هدف اعتبارسنجی</label></div></div>
     <div className="form-layout"><div className="form-card"><div className="form-card-heading"><span className="form-step-label">مرحله {step} از ۳</span><h2>{step === 1 ? "ایده‌ات را واضح و کوتاه تعریف کن" : step === 2 ? "ایده در چه بازاری قرار می‌گیرد؟" : "این بار می‌خواهی چه چیزی را بفهمی؟"}</h2><p>{step === 1 ? "هنوز لازم نیست همه‌چیز را بدانی؛ فقط مسئله و مشتری را تا حد ممکن دقیق کن." : step === 2 ? "این اطلاعات مسیر پرسش‌ها و آزمایش‌های بعدی را شخصی‌سازی می‌کند." : "اولویت تو مشخص می‌کند کدام فرضیه زودتر بررسی شود."}</p></div>
       {step === 1 && <div className="form-fields"><label>نام شما <span>*</span><input value={profile.name} onChange={e => setProfile({ ...profile, name: e.target.value })} placeholder="نام و نام خانوادگی" /></label><label>نقش یا تخصص شما<input value={profile.role} onChange={e => setProfile({ ...profile, role: e.target.value })} placeholder="مثال: بنیان‌گذار، طراح، فروشنده" /></label><label>نام ایده یا پروژه <span>*</span><input value={draft.name} onChange={e => update("name", e.target.value)} placeholder="نام پروژه" /></label><label>ایده در یک جمله <span>*</span><textarea value={draft.description} onChange={e => update("description", e.target.value)} rows={4} placeholder="برای [گروه خاص مشتری] که با [مشکل مشخص] مواجه هستند..." /><small>بهتر است جمله‌ات مشتری، مشکل، راه‌حل و نتیجه را مشخص کند.</small></label><label>این ایده اکنون در چه مرحله‌ای است<select value={draft.stage} onChange={e => update("stage", e.target.value)}><option value="">انتخاب مرحله</option><option>فقط ایده</option><option>نمونه اولیه</option><option>فروش اولیه</option><option>کسب‌وکار فعال</option></select></label></div>}

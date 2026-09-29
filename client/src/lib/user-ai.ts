@@ -1,4 +1,5 @@
 import type { StoredLocationInsights } from "@/lib/persistence";
+import { Clipboard } from "@capacitor/clipboard";
 
 export type UserAIInput = {
   project: Record<string, string>;
@@ -71,6 +72,12 @@ ${locationLines}
 }
 
 export async function copyPrompt(prompt: string): Promise<void> {
+  try {
+    await Clipboard.write({ string: prompt });
+    return;
+  } catch {
+    // Fall back to the browser clipboard below.
+  }
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(prompt);
     return;
@@ -89,6 +96,12 @@ export async function copyPrompt(prompt: string): Promise<void> {
 }
 
 export async function readClipboardText(): Promise<string> {
+  try {
+    const native = await Clipboard.read();
+    if (native.value?.trim()) return native.value;
+  } catch {
+    // Fall back to the browser clipboard below.
+  }
   if (!navigator.clipboard?.readText) {
     throw new Error("مرورگر اجازه خواندن خودکار کلیپ‌بورد را نمی‌دهد؛ پاسخ را دستی جای‌گذاری کنید.");
   }

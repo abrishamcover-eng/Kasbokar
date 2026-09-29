@@ -154,7 +154,9 @@ const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(
 
 export default defineConfig({
   plugins,
-  base: process.env.VITE_BASE_PATH || "/",
+  // Relative assets are required by Capacitor's local WebView. GitHub Actions
+  // still supplies /Kasbokar/ explicitly for the Pages deployment.
+  base: process.env.VITE_BASE_PATH || "./",
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BizSanj</string>
+    <string name="title_activity_main">BizSanj</string>
+    <string name="package_name">ir.bizsanj.app</string>
+    <string name="custom_url_scheme">ir.bizsanj.app</string>
+</resources>

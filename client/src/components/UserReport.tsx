@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
-import { BarChart3, Check, CircleHelp, ExternalLink, Globe2, MapPin, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { BarChart3, Check, CircleHelp, ExternalLink, FileDown, Globe2, MapPin, Sparkles } from "lucide-react";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 import { readStored, STORAGE_KEYS, writeStored, type FinanceInputs, type StoredLocationInsights } from "@/lib/persistence";
 import { readUserAIResult } from "@/lib/user-ai";
 
@@ -26,12 +28,34 @@ export function UserReport({ draft, answers, questions, onBack, onAIReview }: { 
   const dimensions = [["مسئله و نیاز", answers.problem], ["مشتری هدف", answers.customer], ["بازار و رقبا", location?.competitors.length ? `${competitorCount} رقیب` : "ثبت نشده"], ["ارزش پیشنهادی", answers.value], ["مدل درآمد", answers.revenue]];
   const answerText = (value: string) => value.split("||").filter(Boolean).join("، ");
   const [finance, setFinance] = useState<FinanceInputs>(() => readStored(STORAGE_KEYS.finance, emptyFinance));
+  const reportRef = useRef<HTMLElement>(null);
+  const [exporting, setExporting] = useState(false);
   useEffect(() => { writeStored(STORAGE_KEYS.finance, finance); }, [finance]);
+  const exportPdf = async () => {
+    if (!reportRef.current || exporting) return;
+    setExporting(true);
+    try {
+      const canvas = await html2canvas(reportRef.current, { scale: 1.35, useCORS: true, backgroundColor: "#f8f9fb", windowWidth: reportRef.current.scrollWidth });
+      const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+      const pageWidth = 210;
+      const pageHeight = 297;
+      const imageHeight = (canvas.height * pageWidth) / canvas.width;
+      let offset = 0;
+      while (offset < imageHeight) {
+        if (offset > 0) pdf.addPage();
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.88), "JPEG", 0, -offset, pageWidth, imageHeight);
+        offset += pageHeight;
+      }
+      pdf.save(`${draft.name || "bizsanj-report"}.pdf`);
+    } finally {
+      setExporting(false);
+    }
+  };
   const updateFinance = (key: keyof FinanceInputs, value: string) => setFinance(current => ({ ...current, [key]: value }));
   const units = toNumber(finance.monthlyUnits); const price = toNumber(finance.pricePerUnit); const variable = toNumber(finance.variableCostPerUnit); const fixed = toNumber(finance.monthlyFixedCosts); const investment = toNumber(finance.initialInvestment);
   const revenue = units * price; const variableTotal = units * variable; const grossProfit = revenue - variableTotal; const netProfit = grossProfit - fixed; const margin = revenue ? (netProfit / revenue) * 100 : 0; const breakEven = price > variable ? Math.ceil(fixed / (price - variable)) : 0; const payback = netProfit > 0 && investment ? Math.ceil(investment / netProfit) : 0;
-  return <section className="report-page">
-    <div className="report-top"><button className="back-link" onClick={onBack}>بازگشت به فرضیات</button><div className="report-actions"><button className="secondary-button" onClick={onAIReview}><Sparkles size={16} /> ارسال به Claude / ChatGPT / Gemini</button><button className="primary-button" onClick={() => window.print()}>خروجی PDF / چاپ</button></div></div>
+  return <section className="report-page" ref={reportRef}>
+    <div className="report-top no-print"><button className="back-link" onClick={onBack}>بازگشت به فرضیات</button><div className="report-actions"><button className="secondary-button" onClick={onAIReview}><Sparkles size={16} /> ارسال به Claude / ChatGPT / Gemini</button><button className="primary-button" onClick={() => void exportPdf()} disabled={exporting}><FileDown size={16} /> {exporting ? "در حال ساخت PDF..." : "خروجی PDF / چاپ"}</button></div></div>
     <div className="report-heading"><div><div className="eyebrow">گزارش کامل اعتبارسنجی</div><h1>{draft.name || "گزارش بدون نام پروژه"}</h1><p>این گزارش شامل اطلاعات پروژه، تمام پاسخ‌های پرسشنامه، موقعیت، رقبا و نتیجه مشاوره هوش مصنوعی است.</p></div><span className="report-version"><Check size={14} /> داده واقعی پروژه</span></div>
     <div className="report-card project-facts-card"><div className="section-heading"><div><h2>مشخصات پروژه</h2><p>اطلاعاتی که در شروع پروژه ثبت شده است.</p></div><BarChart3 size={17} /></div><div className="report-facts-grid"><div><strong>نام ایده</strong><span>{draft.name || "ثبت نشده"}</span></div><div><strong>شیوه ارائه</strong><span>{draft.presenceType || "ثبت نشده"}</span></div><div><strong>نوع کسب‌وکار</strong><span>{draft.businessType || "ثبت نشده"}</span></div><div><strong>مرحله فعلی</strong><span>{draft.stage || "ثبت نشده"}</span></div><div><strong>نوع مشتری</strong><span>{draft.customerType || "ثبت نشده"}</span></div><div><strong>بازار هدف</strong><span>{draft.market || "ثبت نشده"}</span></div><div><strong>هدف اعتبارسنجی</strong><span>{draft.goal || "ثبت نشده"}</span></div><div className="full-fact"><strong>شرح ایده</strong><span>{draft.description || "ثبت نشده"}</span></div></div></div>
     <div className="report-card finance-card"><div className="section-heading"><div><h2>تحلیل مالی و پیش‌بینی سود و زیان</h2><p>مقادیر را با واحد پولی دلخواه خودت وارد کن؛ این محاسبه برآوردی است و جایگزین حسابداری نیست.</p></div><BarChart3 size={17} /></div><div className="finance-input-grid"><label>تعداد فروش/خدمت در ماه<input inputMode="decimal" value={finance.monthlyUnits} onChange={event => updateFinance("monthlyUnits", event.target.value)} placeholder="مثال: ۱۰۰" /></label><label>قیمت هر واحد<input inputMode="decimal" value={finance.pricePerUnit} onChange={event => updateFinance("pricePerUnit", event.target.value)} placeholder="مثال: ۵۰۰۰۰۰" /></label><label>هزینه متغیر هر واحد<input inputMode="decimal" value={finance.variableCostPerUnit} onChange={event => updateFinance("variableCostPerUnit", event.target.value)} placeholder="مواد، ارسال، کارمزد" /></label><label>هزینه ثابت ماهانه<input inputMode="decimal" value={finance.monthlyFixedCosts} onChange={event => updateFinance("monthlyFixedCosts", event.target.value)} placeholder="اجاره، حقوق، ابزار" /></label><label>سرمایه‌گذاری اولیه<input inputMode="decimal" value={finance.initialInvestment} onChange={event => updateFinance("initialInvestment", event.target.value)} placeholder="اختیاری" /></label></div><div className="finance-result-grid"><div><span>درآمد ماهانه</span><strong>{formatNumber(revenue)}</strong></div><div><span>هزینه متغیر</span><strong>{formatNumber(variableTotal)}</strong></div><div><span>سود ناخالص</span><strong>{formatNumber(grossProfit)}</strong></div><div className={netProfit >= 0 ? "positive" : "negative"}><span>سود/زیان خالص</span><strong>{formatNumber(netProfit)}</strong></div><div><span>حاشیه سود خالص</span><strong>{revenue ? `${formatNumber(margin)}٪` : "—"}</strong></div><div><span>نقطه سربه‌سر ماهانه</span><strong>{breakEven ? `${formatNumber(breakEven)} واحد` : "—"}</strong></div>{payback > 0 && <div><span>بازگشت سرمایه تقریبی</span><strong>{formatNumber(payback)} ماه</strong></div>}</div></div>

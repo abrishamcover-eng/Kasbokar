@@ -10,6 +10,16 @@ export const STORAGE_KEYS = {
   recentProjects: `${STORAGE_PREFIX}recent-projects`,
 } as const;
 
+let storageScope = "";
+
+export function setStorageScope(email: string | null | undefined): void {
+  storageScope = email?.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "_") || "";
+}
+
+function scopedKey(key: string): string {
+  return storageScope ? `${key}:account:${storageScope}` : key;
+}
+
 export type UserProfile = {
   name: string;
   role: string;
@@ -100,7 +110,7 @@ export function readStored<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
 
   try {
-    const raw = window.localStorage.getItem(key);
+    const raw = window.localStorage.getItem(scopedKey(key));
     return raw === null ? fallback : (JSON.parse(raw) as T);
   } catch {
     return fallback;
@@ -111,7 +121,7 @@ export function writeStored<T>(key: string, value: T): void {
   if (typeof window === "undefined") return;
 
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(scopedKey(key), JSON.stringify(value));
   } catch {
     // Storage can be unavailable in private browsing or when quota is exceeded.
   }
@@ -122,10 +132,17 @@ export function clearStoredData(): void {
 
   Object.values(STORAGE_KEYS).forEach((key) => {
     try {
-      window.localStorage.removeItem(key);
+      window.localStorage.removeItem(scopedKey(key));
     } catch {
       // Ignore storage access errors so the demo remains usable.
     }
+  });
+}
+
+export function clearCurrentProjectData(): void {
+  if (typeof window === "undefined") return;
+  [STORAGE_KEYS.draft, STORAGE_KEYS.answers, STORAGE_KEYS.activeQuestion, STORAGE_KEYS.location, STORAGE_KEYS.finance, STORAGE_KEYS.recentProjects].forEach((key) => {
+    try { window.localStorage.removeItem(scopedKey(key)); } catch { /* ignore storage errors */ }
   });
 }
 
